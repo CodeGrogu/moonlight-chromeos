@@ -8,6 +8,8 @@ on:
 env:
   # Run AppImages without FUSE — GitHub Actions ARM runners don't expose FUSE2
   APPIMAGE_EXTRACT_AND_RUN: "1"
+  # Opt into Node.js 24 now (Node.js 20 actions deprecated, forced off June 16 2026)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
@@ -73,15 +75,6 @@ jobs:
           cd deps/libva && ./autogen.sh && ./configure --enable-x11 --enable-wayland
           make -j$(nproc) && sudo make install
 
-      - name: Build libplacebo
-        run: |
-          git clone https://github.com/haasn/libplacebo.git deps/libplacebo
-          cd deps/libplacebo
-          git checkout b915882db8d349cc1831c3d3978ee7d5f914b10b
-          git submodule update --init --recursive
-          meson setup build -Dvulkan=disabled -Dopengl=disabled -Ddemos=false
-          ninja -C build && sudo ninja -C build install
-
       - name: Build dav1d
         run: |
           git clone --branch 1.5.3 --depth 1 https://code.videolan.org/videolan/dav1d.git deps/dav1d
@@ -124,6 +117,7 @@ jobs:
           qmake6 "$GITHUB_WORKSPACE/moonlight-qt.pro" \
             CONFIG+=release \
             CONFIG+=disable-libvdpau \
+            CONFIG+=disable-libplacebo \
             "PREFIX=$GITHUB_WORKSPACE/build/deploy-release/usr"
           make -j$(nproc) release
           make install
