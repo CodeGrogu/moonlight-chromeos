@@ -1,0 +1,154 @@
+name: Build - ChromeOS ARM64
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  # Run AppImages without FUSE — GitHub Actions ARM runners don't expose FUSE2
+  APPIMAGE_EXTRACT_AND_RUN: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build nasm pkg-config python3-pip \
+            qt6-base-dev qt6-declarative-dev libqt6svg6-dev qt6-wayland \
+            qml6-module-qtquick-controls qml6-module-qtquick-templates \
+            qml6-module-qtquick-layouts qml6-module-qtqml-workerscript \
+            qml6-module-qtquick-window qml6-module-qtquick \
+            libssl-dev libopus-dev libfreetype-dev \
+            libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev \
+            libgbm-dev libdrm-dev libdbus-1-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev liburing-dev \
+            libx11-dev libxcursor-dev libxext-dev libxi-dev \
+            libxinerama-dev libxkbcommon-dev libxrandr-dev libxss-dev \
+            libxt-dev libxv-dev libxxf86vm-dev libxcb-dri3-dev \
+            libx11-xcb-dev libxfixes-dev libxtst-dev \
+            libva-dev wayland-protocols libvulkan-dev glslang-dev \
+            libfuse2 autoconf automake libtool
+          sudo pip3 install meson --break-system-packages
+
+      - name: Build SDL3
+        run: |
+          git clone --branch release-3.4.10 --depth 1 https://github.com/libsdl-org/SDL.git deps/SDL
+          cmake -DSDL_KMSDRM=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_INSTALL_DOCS=OFF \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -S deps/SDL -B deps/SDL/build
+          cmake --build deps/SDL/build -j$(nproc)
+          sudo cmake --install deps/SDL/build
+
+      - name: Build sdl2-compat
+        run: |
+          git clone --branch release-2.32.68 --depth 1 https://github.com/libsdl-org/sdl2-compat.git deps/sdl2-compat
+          cmake -DSDL2COMPAT_TESTS=OFF -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+            -S deps/sdl2-compat -B deps/sdl2-compat/build
+          cmake --build deps/sdl2-compat/build -j$(nproc)
+          sudo cmake --install deps/sdl2-compat/build
+
+      - name: Build SDL_ttf
+        run: |
+          git clone https://github.com/libsdl-org/SDL_ttf.git deps/SDL_ttf
+          cd deps/SDL_ttf
+          git checkout a883e490e30fb44a5336ea3dcb990c6982c5216f
+          git submodule update --init --recursive
+          ./autogen.sh && ./configure && make -j$(nproc) && sudo make install
+
+      - name: Build libva
+        run: |
+          git clone --branch 2.23.0 --depth 1 https://github.com/intel/libva.git deps/libva
+          cd deps/libva && ./autogen.sh && ./configure --enable-x11 --enable-wayland
+          make -j$(nproc) && sudo make install
+
+      - name: Build libplacebo
+        run: |
+          git clone https://github.com/haasn/libplacebo.git deps/libplacebo
+          cd deps/libplacebo
+          git checkout b915882db8d349cc1831c3d3978ee7d5f914b10b
+          git submodule update --init --recursive
+          meson setup build -Dvulkan=enabled -Dopengl=disabled -Ddemos=false
+          ninja -C build && sudo ninja -C build install
+
+      - name: Build dav1d
+        run: |
+          git clone --branch 1.5.3 --depth 1 https://code.videolan.org/videolan/dav1d.git deps/dav1d
+          meson setup deps/dav1d/build deps/dav1d \
+            -Ddefault_library=static -Dbuildtype=release \
+            -Denable_tools=false -Denable_tests=false
+          ninja -C deps/dav1d/build && sudo ninja -C deps/dav1d/build install
+
+      - name: Build FFmpeg
+        run: |
+          git clone --branch n8.1.1 --depth 1 https://github.com/FFmpeg/FFmpeg.git deps/FFmpeg
+          cd deps/FFmpeg
+          ./configure \
+            --enable-pic --enable-lto --disable-static --enable-shared \
+            --disable-all --disable-autodetect \
+            --enable-avcodec --enable-avformat --enable-swscale \
+            --enable-decoder=h264 --enable-decoder=hevc --enable-decoder=av1 \
+            --enable-vaapi \
+            --enable-hwaccel=h264_vaapi \
+            --enable-hwaccel=hevc_vaapi \
+            --enable-hwaccel=av1_vaapi \
+            --enable-libdrm \
+            --enable-vulkan \
+            --enable-hwaccel=h264_vulkan \
+            --enable-hwaccel=hevc_vulkan \
+            --enable-hwaccel=av1_vulkan \
+            --enable-libdav1d \
+            --enable-decoder=libdav1d
+          make -j$(nproc) && sudo make install
+
+      - name: Install linuxdeploy
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
+          chmod +x linuxdeploy-aarch64.AppImage linuxdeploy-plugin-qt-aarch64.AppImage
+          sudo mv linuxdeploy-aarch64.AppImage /usr/local/bin/linuxdeploy-aarch64.AppImage
+          sudo mv linuxdeploy-plugin-qt-aarch64.AppImage /usr/local/bin/linuxdeploy-plugin-qt-aarch64.AppImage
+
+      - name: Build Moonlight
+        run: |
+          sudo ldconfig
+          mkdir -p build/build-release build/deploy-release build/installer-release
+          cd build/build-release
+          qmake6 "$GITHUB_WORKSPACE/moonlight-qt.pro" \
+            CONFIG+=release \
+            CONFIG+=disable-libvdpau \
+            "PREFIX=$GITHUB_WORKSPACE/build/deploy-release/usr"
+          make -j$(nproc) release
+          make install
+
+      - name: Package AppImage
+        run: |
+          export QML_SOURCES_PATHS="$GITHUB_WORKSPACE/app/gui"
+          export QMAKE=qmake6
+          cd build/installer-release
+          VERSION=chromeos-arm64 \
+          LD_LIBRARY_PATH=/usr/local/lib \
+          linuxdeploy-aarch64.AppImage \
+            --appdir "$GITHUB_WORKSPACE/build/deploy-release" \
+            --library=/usr/local/lib/libSDL3.so.0 \
+            --plugin qt \
+            --output appimage
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v6
+        with:
+          name: Moonlight-ChromeOS-arm64
+          path: build/installer-release/Moonlight-*.AppImage
+          compression-level: 0
+          if-no-files-found: error
