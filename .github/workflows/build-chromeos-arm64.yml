@@ -79,7 +79,7 @@ jobs:
           cd deps/libplacebo
           git checkout b915882db8d349cc1831c3d3978ee7d5f914b10b
           git submodule update --init --recursive
-          meson setup build -Dvulkan=enabled -Dopengl=disabled -Ddemos=false
+          meson setup build -Dvulkan=disabled -Dopengl=disabled -Ddemos=false
           ninja -C build && sudo ninja -C build install
 
       - name: Build dav1d
